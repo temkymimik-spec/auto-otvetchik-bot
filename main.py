@@ -75,10 +75,10 @@ async def main() -> None:
     dp = Dispatcher()
     setup_handlers(dp, Handlers(app))
 
+    polling = asyncio.create_task(dp.start_polling(bot))
     log.info("Подключаю рабочие аккаунты...")
     await app.engine.reload()
 
-    polling = asyncio.create_task(dp.start_polling(bot))
     try:
         await app.engine.idle()
     finally:

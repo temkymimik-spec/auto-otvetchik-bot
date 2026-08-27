@@ -110,7 +110,13 @@ class AutoReplyEngine:
         for slot in sorted(items):
             if slot in self.clients:
                 continue
-            if await self.start_slot(slot):
+            try:
+                ok = await asyncio.wait_for(self.start_slot(slot), timeout=30)
+            except asyncio.TimeoutError:
+                self.errors[slot] = "таймаут подключения (30 сек)"
+                log.error("Аккаунт %s: таймаут подключения", slot)
+                ok = False
+            if ok:
                 started[slot] = self.names.get(slot, "")
         return started
 
