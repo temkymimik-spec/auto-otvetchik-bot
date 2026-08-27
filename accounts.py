@@ -50,6 +50,9 @@ class SessionStore:
             {str(k): v for k, v in self.strings.items()},
         )
 
+    def _save_assigned(self) -> None:
+        _save_json(self.cfg.ASSIGNED_PATH, self._assigned)
+
     def add_string(self, session_string: str, slot: int = 0) -> int:
         used = set(self.items)
         if slot and 1 <= slot <= self.cfg.MAX_ACCOUNTS and slot not in used:
@@ -105,7 +108,7 @@ class SessionStore:
             if slot is None:
                 slot = self._next_free(used)
                 self._assigned[name] = slot
-                _save_json(self.cfg.ASSIGNED_PATH, self._assigned)
+                self._save_assigned()
             if 1 <= slot <= self.cfg.MAX_ACCOUNTS:
                 items[slot] = (str(path), KIND_FILE)
                 used.add(slot)

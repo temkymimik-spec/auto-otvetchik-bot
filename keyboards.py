@@ -13,6 +13,7 @@ def main_menu() -> InlineKeyboardMarkup:
     b.button(text="📝 Текст всем", callback_data="text:all")
     b.button(text="✅ Включить все", callback_data="all:on")
     b.button(text="⛔ Выключить все", callback_data="all:off")
+    b.button(text="⚙️ Настройки", callback_data="set:show")
     b.button(text="❓ Помощь", callback_data="help:show")
     b.adjust(2)
     return b.as_markup()
@@ -49,7 +50,24 @@ def account_panel(slot: int) -> InlineKeyboardMarkup:
     b.button(text="✅ Включить", callback_data=f"acc:on:{slot}")
     b.button(text="⛔ Выключить", callback_data=f"acc:off:{slot}")
     b.row(InlineKeyboardButton(text="✏️ Изменить текст", callback_data=f"acc:text:{slot}"))
+    b.row(InlineKeyboardButton(text="🗑 Удалить аккаунт", callback_data=f"acc:del:{slot}"))
     b.row(InlineKeyboardButton(text="📋 Аккаунты", callback_data="acc:list:0"))
+    b.row(InlineKeyboardButton(text="⬅️ Меню", callback_data="menu:main"))
+    return b.as_markup()
+
+
+def confirm_delete(slot: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Да, удалить", callback_data=f"acc:delc:{slot}")
+    b.button(text="⬅️ Отмена", callback_data=f"acc:open:{slot}")
+    b.adjust(2)
+    return b.as_markup()
+
+
+def settings_panel() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="⏱ Изменить паузу", callback_data="set:cool")
+    b.button(text="📝 Текст по умолчанию", callback_data="set:def")
     b.row(InlineKeyboardButton(text="⬅️ Меню", callback_data="menu:main"))
     return b.as_markup()
 
@@ -57,6 +75,12 @@ def account_panel(slot: int) -> InlineKeyboardMarkup:
 def text_prompt() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="✖️ Отмена", callback_data="cancel:input")
+    return b.as_markup()
+
+
+def back_to_menu() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="⬅️ Меню", callback_data="menu:main")
     return b.as_markup()
 
 

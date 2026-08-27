@@ -112,11 +112,6 @@ class AutoReplyEngine:
                 continue
             if await self.start_slot(slot):
                 started[slot] = self.names.get(slot, "")
-        if not self.clients:
-            log.warning(
-                "Рабочих аккаунтов нет. Положи accN.session в %s и запусти /scan",
-                config.DATA_DIR,
-            )
         return started
 
     async def idle(self) -> None:
@@ -141,10 +136,10 @@ class AutoReplyEngine:
                 return
             now = time.time()
             key = (slot, sender)
-            if now - self._last.get(key, 0) < config.COOLDOWN:
+            if now - self._last.get(key, 0) < self.cfg.cooldown:
                 return
             self._last[key] = now
-            await event.reply(acc.get("reply_text") or config.DEFAULT_REPLY)
+            await event.reply(acc.get("reply_text") or self.cfg.default_reply)
             log.info("[акк %s] ответил %s", slot, sender)
         except Exception as exc:
             log.warning("[акк %s] ошибка автоответа: %s", slot, exc)

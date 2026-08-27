@@ -3,6 +3,7 @@
 import logging
 import re
 import time
+from pathlib import Path
 
 from aiogram import Dispatcher, F, Router
 from aiogram.filters import CommandStart
@@ -89,12 +90,13 @@ class Handlers:
         await message.answer(
             "🎛 <b>Панель управления автоответчиком</b>\n\n"
             f"📡 Рабочих аккаунтов: <b>{len(engine.clients)}</b>\n"
-            f"⏱ Пауза между ответами: <b>{config.COOLDOWN} сек.</b>\n\n"
+            f"⏱ Пауза между ответами: <b>{self.app.cfg.cooldown:g} сек.</b>\n\n"
             f"<b>Как добавить аккаунт:</b>\n"
-            f"• просто отправь мне файл сессии <code>accN.session</code> — "
+            f"• просто отправь мне файл сессии <code>.session</code> — "
             f"аккаунт подключится сам\n"
             f"• или вставь строку-сессию в чат\n\n"
-            f"У каждого аккаунта — свой текст ответа.",
+            f"У каждого аккаунта — свой текст ответа, во всём остальном "
+            f"помогут кнопки.",
             reply_markup=kb.main_menu(),
         )
 
@@ -108,7 +110,8 @@ class Handlers:
         await query.message.edit_text(
             "🎛 <b>Панель управления</b>\n\n"
             f"📡 Аккаунтов в сети: <b>{len(engine.clients)}</b>\n"
-            f"⚙️ Автоответ включён у <b>{sum(1 for s in engine.clients if self.app.cfg.acc(s).get('enabled', True))}</b>\n\n"
+            f"⚙️ Автоответ включён у <b>{sum(1 for s in engine.clients if self.app.cfg.acc(s).get('enabled', True))}</b>\n"
+            f"⏱ Пауза: <b>{self.app.cfg.cooldown:g} сек.</b>\n\n"
             f"Что нужно сделать?",
             reply_markup=kb.main_menu(),
         )
@@ -120,12 +123,13 @@ class Handlers:
         await query.message.edit_text(
             "❓ <b>Всё управление — кнопками</b>\n\n"
             "📋 <b>Аккаунты</b> — список; нажми на номер, чтобы открыть панель аккаунта "
-            "(вкл/выкл, изменить текст)\n"
+            "(вкл/выкл, изменить текст, удалить)\n"
+            "⭐️ <b>Настройки</b> — общая пауза и текст ответа по умолчанию\n"
             "📝 <b>Текст всем</b> — задать один текст для всех аккаунтов\n"
             "🔍 Сканировать — подключить новые сессии без перезапуска\n"
             "📊 Статус — сводка по системе\n\n"
-            "Файлы сессий <code>accN.session</code> клади в <code>/app/data</code> "
-            "(на хостинге это папка <code>data/</code>).",
+            "➕ Новый аккаунт: просто отправь мне файл <code>.session</code> "
+            "или вставь строку-сессию.",
             reply_markup=kb.main_menu(),
         )
 
@@ -274,6 +278,8 @@ class Handlers:
         target = _CTX.get(query.from_user.id, ALL)
         if target == ALL:
             await self.text_all(query)
+        elif target.startswith("set:"):
+            await self._prompt_setting(query, target)
         else:
             slot = self._target_slot(target)
             if slot is None:
@@ -293,12 +299,112 @@ class Handlers:
         target = _CTX.get(query.from_user.id, ALL)
         _PENDING_TEXT.pop(query.from_user.id, None)
         await query.answer("Отменено")
-        if target != ALL:
+        if target != ALL and not target.startswith("set:"):
             slot = self._target_slot(target)
             if slot is not None:
                 await query.message.edit_text(self._account_card(slot), reply_markup=kb.account_panel(slot))
                 return
+        if target.startswith("set:"):
+            await query.message.edit_text(self._settings_text(), reply_markup=kb.settings_panel())
+            return
         await query.message.edit_text("Отменено.", reply_markup=kb.main_menu())
+
+    # ---------- настройки ----------
+    def _settings_text(self) -> str:
+        return (
+            "⚙️ <b>Настройки</b>\n\n"
+            f"⏱ Пауза между ответами: <b>{self.app.cfg.cooldown:g}</b> сек\n"
+            f"📝 Текст по умолчанию: <b>{self.app.cfg.default_reply}</b>"
+        )
+
+    async def set_show(self, query: CallbackQuery):
+        if not self._admin_query(query):
+            return await query.answer("Нет доступа", show_alert=True)
+        await query.answer()
+        await query.message.edit_text(self._settings_text(), reply_markup=kb.settings_panel())
+
+    async def set_cool(self, query: CallbackQuery):
+        if not self._admin_query(query):
+            return await query.answer("Нет доступа", show_alert=True)
+        await self._prompt_setting(query, "set:cooldown")
+
+    async def set_def(self, query: CallbackQuery):
+        if not self._admin_query(query):
+            return await query.answer("Нет доступа", show_alert=True)
+        await self._prompt_setting(query, "set:default")
+
+    async def _prompt_setting(self, query: CallbackQuery, target: str):
+        if target == "set:cooldown":
+            prompt = "⏱ Введи паузу между ответами в секундах (число, например 10):"
+        else:
+            prompt = "📝 Напиши текст ответа по умолчанию (применяется к новым аккаунтам):"
+        _CTX[query.from_user.id] = target
+        _PENDING_TEXT[query.from_user.id] = target
+        await query.answer()
+        await query.message.edit_text(prompt, reply_markup=kb.text_prompt())
+
+    async def _save_setting(self, message: Message, target: str, text: str):
+        if target == "set:cooldown":
+            try:
+                value = float(text.replace(",", "."))
+                if value < 0:
+                    raise ValueError
+            except ValueError:
+                await message.answer("❌ Некорректное число. Пример: 10")
+                _PENDING_TEXT[message.from_user.id] = target
+                return
+            self.app.cfg.set_cooldown(value)
+            await message.answer(
+                f"⏱ Пауза между ответами: <b>{value:g} сек</b>",
+                reply_markup=kb.settings_panel(),
+            )
+            return
+        self.app.cfg.set_default_reply(text)
+        await message.answer(
+            f"📝 Текст по умолчанию сохранён:\n\n{text}",
+            reply_markup=kb.settings_panel(),
+        )
+
+    # ---------- удаление аккаунта ----------
+    async def acc_del(self, query: CallbackQuery):
+        if not self._admin_query(query):
+            return await query.answer("Нет доступа", show_alert=True)
+        slot = self._slot_of(query)
+        if slot not in self._slots_known():
+            await query.answer("Такого аккаунта нет", show_alert=True)
+            return
+        await query.answer()
+        await query.message.edit_text(
+            f"🗑 Удалить аккаунт <b>{slot}. {self.app.engine.name(slot)}</b>?\n"
+            "Сессия будет удалена, аккаунт отключится.",
+            reply_markup=kb.confirm_delete(slot),
+        )
+
+    async def acc_delc(self, query: CallbackQuery):
+        if not self._admin_query(query):
+            return await query.answer("Нет доступа", show_alert=True)
+        slot = self._slot_of(query)
+        await self.app.engine.stop_slot(slot)
+        self.app.engine.errors.pop(slot, None)
+        entry = self.app.store.items.get(slot)
+        if entry:
+            value, kind = entry
+            if kind == "файл":
+                try:
+                    Path(value).unlink(missing_ok=True)
+                except Exception as exc:
+                    log.warning("не удалось удалить файл %s: %s", value, exc)
+                for name, mapped in list(self.app.store._assigned.items()):
+                    if mapped == slot:
+                        self.app.store._assigned.pop(name, None)
+                        self.app.store._save_assigned()
+            else:
+                self.app.store.strings.pop(slot, None)
+                self.app.store._save_strings()
+        self.app.cfg.remove_account(slot)
+        self.app.store.scan()
+        await query.answer()
+        await query.message.edit_text(f"🗑 Аккаунт {slot} удалён.", reply_markup=kb.main_menu())
 
     # ---------- загрузка сессий прямо в боте ----------
     async def on_document(self, message: Message):
@@ -360,6 +466,9 @@ class Handlers:
             if not text:
                 await message.answer("Пустой текст нельзя. Отправь текст ещё раз.")
                 _PENDING_TEXT[uid] = target
+                return
+            if target in ("set:cooldown", "set:default"):
+                await self._save_setting(message, target, text)
                 return
             slots = self._set_text_action(target, text)
             if not slots:
@@ -433,9 +542,14 @@ def setup_handlers(dp: Dispatcher, handlers: Handlers) -> None:
     router.callback_query.register(handlers.acc_on, lambda q: q.data and q.data.startswith("acc:on:"))
     router.callback_query.register(handlers.acc_off, lambda q: q.data and q.data.startswith("acc:off:"))
     router.callback_query.register(handlers.acc_text, lambda q: q.data and q.data.startswith("acc:text:"))
+    router.callback_query.register(handlers.acc_del, lambda q: q.data and q.data.startswith("acc:del:"))
+    router.callback_query.register(handlers.acc_delc, lambda q: q.data and q.data.startswith("acc:delc:"))
     router.callback_query.register(handlers.all_on, lambda q: q.data == "all:on")
     router.callback_query.register(handlers.all_off, lambda q: q.data == "all:off")
     router.callback_query.register(handlers.text_all, lambda q: q.data == "text:all")
+    router.callback_query.register(handlers.set_show, lambda q: q.data == "set:show")
+    router.callback_query.register(handlers.set_cool, lambda q: q.data == "set:cool")
+    router.callback_query.register(handlers.set_def, lambda q: q.data == "set:def")
     router.callback_query.register(handlers.edit_again, lambda q: q.data == "edit:again")
     router.callback_query.register(handlers.cancel_input, lambda q: q.data == "cancel:input")
     router.callback_query.register(handlers.scan_run, lambda q: q.data == "scan:run")
