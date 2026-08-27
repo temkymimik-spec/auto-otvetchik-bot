@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Полностью кнопочная панель управления автоответчиком."""
 import logging
+import re
 import time
 
-from aiogram import Dispatcher, Router
+from aiogram import Dispatcher, F, Router
 from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, Message
 
@@ -17,6 +18,14 @@ PAGE_SIZE = 10
 
 _PENDING_TEXT: dict[int, str] = {}  # uid -> '__all__' | 'slot:N'
 _CTX: dict[int, str] = {}           # uid -> '__all__' | 'slot:N' (для «Ещё»/«Отмена»)
+
+_SESSION_RE = re.compile(r"[A-Za-z0-9+/=_\-:.]+")
+
+
+def _looks_like_string_session(text: str) -> bool:
+    if len(text) < 80:
+        return False
+    return bool(_SESSION_RE.fullmatch(text))
 
 
 class Handlers:
@@ -82,9 +91,9 @@ class Handlers:
             f"📡 Рабочих аккаунтов: <b>{len(engine.clients)}</b>\n"
             f"⏱ Пауза между ответами: <b>{config.COOLDOWN} сек.</b>\n\n"
             f"<b>Как добавить аккаунт:</b>\n"
-            f"• закинь файл <code>accN.session</code> в папку <code>{config.DATA_DIR}</code>\n"
-            f"• задай строку <code>ACC{N}_SESSION</code> в переменных окружения\n"
-            f"• затем нажми «🔄 Сканировать»\n\n"
+            f"• просто отправь мне файл сессии <code>accN.session</code> — "
+            f"аккаунт подключится сам\n"
+            f"• или вставь строку-сессию в чат\n\n"
             f"У каждого аккаунта — свой текст ответа.",
             reply_markup=kb.main_menu(),
         )
@@ -291,26 +300,89 @@ class Handlers:
                 return
         await query.message.edit_text("Отменено.", reply_markup=kb.main_menu())
 
+    # ---------- загрузка сессий прямо в боте ----------
+    async def on_document(self, message: Message):
+        if not self._admin_msg(message):
+            return
+        doc = message.document
+        if not doc:
+            return
+        raw = (doc.file_name or "").strip()
+        name = raw.rsplit("/", 1)[-1].rsplit("\\", 1)[-1].strip()
+        if not name:
+            await message.answer("Не могу разобрать имя файла.", reply_markup=kb.back_to_menu())
+            return
+        lower = name.lower()
+        if lower.endswith(".session"):
+            pass
+        elif "." not in name:
+            name = name + ".session"
+        else:
+            await message.answer(
+                "❌ Нужен файл сессии с расширением <code>.session</code>.\n"
+                "Пример: <code>acc1.session</code> (создаётся ботом через gen_session.py).",
+                reply_markup=kb.back_to_menu(),
+            )
+            return
+        dest = config.DATA_DIR / name
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            await message.bot.download(doc, destination=dest)
+        except Exception as exc:
+            await message.answer(f"❌ Не удалось сохранить файл: {exc}", reply_markup=kb.back_to_menu())
+            return
+        await message.answer(f"📥 Файл <code>{name}</code> получен, подключаю аккаунт...")
+        started = await self.app.engine.reload()
+        await message.answer(self._scan_summary(started), reply_markup=kb.scan_result_panel())
+
+    def _scan_summary(self, started: dict[int, str]) -> str:
+        engine = self.app.engine
+        lines = ["🔄 <b>Готово</b>\n"]
+        if started:
+            for slot, name in sorted(started.items()):
+                lines.append(f"✅ {slot}. {name}")
+        else:
+            lines.append("Новых подключений нет.")
+        if engine.errors:
+            lines.append("\n❌ Ошибки в сессиях:")
+            for slot in sorted(engine.errors)[:5]:
+                error = engine.errors[slot]
+                lines.append(f"  {slot}. {error.split(':')[-1][:60]}")
+        return "\n".join(lines)
+
     async def catch_text(self, message: Message):
         if not self._admin_msg(message) or not message.text:
             return
         uid = message.from_user.id
         target = _PENDING_TEXT.pop(uid, None)
-        if not target:
+        if target:
+            text = message.text.strip()
+            if not text:
+                await message.answer("Пустой текст нельзя. Отправь текст ещё раз.")
+                _PENDING_TEXT[uid] = target
+                return
+            slots = self._set_text_action(target, text)
+            if not slots:
+                await message.answer("Нет аккаунтов в сети.", reply_markup=kb.main_menu())
+                return
+            who = ", ".join(f"{s} ({self.app.engine.name(s)})" for s in slots)
+            await message.answer(
+                f"✅ Текст сохранён для: <b>{who}</b>\n\n{text}",
+                reply_markup=kb.text_done(),
+            )
             return
+
         text = message.text.strip()
-        if not text:
-            await message.answer("Пустой текст нельзя. Отправь текст ещё раз.")
-            _PENDING_TEXT[uid] = target
+        if _looks_like_string_session(text):
+            slot = self.app.store.add_string(text)
+            await message.answer(f"🔑 Строка-сессия добавлена в слот <b>{slot}</b>, подключаю...")
+            started = await self.app.engine.reload()
+            await message.answer(self._scan_summary(started), reply_markup=kb.scan_result_panel())
             return
-        slots = self._set_text_action(target, text)
-        if not slots:
-            await message.answer("Нет аккаунтов в сети.", reply_markup=kb.main_menu())
-            return
-        who = ", ".join(f"{s} ({self.app.engine.name(s)})" for s in slots)
         await message.answer(
-            f"✅ Текст сохранён для: <b>{who}</b>\n\n{text}",
-            reply_markup=kb.text_done(),
+            "👀 Это не сессия. Чтобы подключить аккаунт — отправь мне файл <code>.session</code> "
+            "или вставь строку-сессию.",
+            reply_markup=kb.main_menu(),
         )
 
     # ---------- сканирование ----------
@@ -320,20 +392,26 @@ class Handlers:
         await query.answer()
         await query.message.edit_text("🔄 Сканирую сессии...", reply_markup=None)
         started = await self.app.engine.reload()
-        engine = self.app.engine
-        lines = ["🔄 <b>Сканирование завершено</b>\n"]
-        if started:
-            for slot, name in sorted(started.items()):
-                lines.append(f"✅ {slot}. {name}")
-        else:
-            lines.append("Новых аккаунтов не найдено.")
-        if engine.errors:
-            lines.append("\n❌ Ошибки в сессиях:")
-            for slot in sorted(engine.errors)[:5]:
-                lines.append(f"  {slot}. {engine.errors[slot][:60]}")
-        if not self._slots_known():
-            lines.append(f"\nФайлов нет. Положи <code>accN.session</code> в <code>{config.DATA_DIR}</code>.")
-        await query.message.edit_text("\n".join(lines), reply_markup=kb.scan_result_panel())
+        await query.message.edit_text(
+            self._scan_summary(started),
+            reply_markup=kb.scan_result_panel(),
+        )
+
+    async def help_add(self, query: CallbackQuery):
+        if not self._admin_query(query):
+            return await query.answer("Нет доступа", show_alert=True)
+        await query.answer()
+        await query.message.edit_text(
+            "➕ <b>Как подключить аккаунт</b>\n\n"
+            "<b>Вариант 1 — файл:</b>\n"
+            "📎 Просто отправь мне файл сессии <code>accN.session</code> — "
+            "аккаунт подключится сам.\n"
+            "Файл создаётся на ПК: <code>python gen_session.py</code> (вариант 1).\n\n"
+            "<b>Вариант 2 — строка:</b>\n"
+            "🔑 Скопируй и вставь в чат строку-сессию (из gen_session.py, вариант 2).\n\n"
+            "Аккаунтов можно добавлять сколько угодно. У каждого — свой текст ответа.",
+            reply_markup=kb.main_menu(),
+        )
 
     # ---------- заглушка ----------
     async def noop(self, query: CallbackQuery):
@@ -343,10 +421,12 @@ class Handlers:
 def setup_handlers(dp: Dispatcher, handlers: Handlers) -> None:
     router = Router()
     router.message.register(handlers.cmd_start, CommandStart())
+    router.message.register(handlers.on_document, F.document)
     router.message.register(handlers.catch_text)
 
     router.callback_query.register(handlers.menu_main, lambda q: q.data == "menu:main")
     router.callback_query.register(handlers.help_show, lambda q: q.data == "help:show")
+    router.callback_query.register(handlers.help_add, lambda q: q.data == "help:add")
     router.callback_query.register(handlers.st_show, lambda q: q.data == "st:show")
     router.callback_query.register(handlers.acc_list, lambda q: q.data and q.data.startswith("acc:list:"))
     router.callback_query.register(handlers.acc_open, lambda q: q.data and q.data.startswith("acc:open:"))

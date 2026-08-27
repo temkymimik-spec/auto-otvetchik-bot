@@ -3,11 +3,13 @@
 import asyncio
 import logging
 import time
+from pathlib import Path
 
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
 import config
+from accounts import KIND_FILE
 from config_store import ConfigStore
 
 log = logging.getLogger("engine")
@@ -20,6 +22,7 @@ class AutoReplyEngine:
         self.clients: dict[int, TelegramClient] = {}
         self.names: dict[int, str] = {}
         self.errors: dict[int, str] = {}
+        self._file_mtimes: dict[int, float | None] = {}
         self._last = {}
 
     def name(self, slot: int) -> str:
@@ -62,6 +65,7 @@ class AutoReplyEngine:
                 f"@{me.username}" if me.username else (me.first_name or f"id {me.id}")
             )
             self.errors.pop(slot, None)
+            self._file_mtimes[slot] = self._file_mtime(value) if kind == KIND_FILE else None
             log.info("Аккаунт %s онлайн: %s", slot, self.names[slot])
             return True
         except Exception as exc:
@@ -78,16 +82,30 @@ class AutoReplyEngine:
         except Exception:
             pass
 
+    @staticmethod
+    def _file_mtime(value: str):
+        try:
+            return Path(value).stat().st_mtime
+        except Exception:
+            return None
+
     async def stop_slot(self, slot: int) -> None:
         client = self.clients.pop(slot, None)
         self.names.pop(slot, None)
+        self._file_mtimes.pop(slot, None)
         if client is not None:
             await self._safe_disconnect(client)
 
     async def reload(self) -> dict[int, str]:
         items = self.store.scan()
-        for slot in [s for s in self.clients if s not in items]:
-            await self.stop_slot(slot)
+        for slot in list(self.clients):
+            if slot not in items:
+                await self.stop_slot(slot)
+                continue
+            value, kind = items[slot]
+            stamp = self._file_mtime(value) if kind == KIND_FILE else None
+            if self._file_mtimes.get(slot) != stamp:
+                await self.stop_slot(slot)
         started: dict[int, str] = {}
         for slot in sorted(items):
             if slot in self.clients:

@@ -38,7 +38,27 @@ class SessionStore:
     def __init__(self, cfg):
         self.cfg = cfg
         self._assigned = _load_json(cfg.ASSIGNED_PATH, {})
+        self.strings = {
+            int(k): v
+            for k, v in _load_json(cfg.SESSION_STRINGS_PATH, {}).items()
+        }
         self.items: dict[int, tuple[str, str]] = {}
+
+    def _save_strings(self) -> None:
+        _save_json(
+            self.cfg.SESSION_STRINGS_PATH,
+            {str(k): v for k, v in self.strings.items()},
+        )
+
+    def add_string(self, session_string: str, slot: int = 0) -> int:
+        used = set(self.items)
+        if slot and 1 <= slot <= self.cfg.MAX_ACCOUNTS and slot not in used:
+            chosen = slot
+        else:
+            chosen = self._next_free(used)
+        self.strings[chosen] = session_string
+        self._save_strings()
+        return chosen
 
     def _next_free(self, used: set[int]) -> int:
         n = 1
@@ -99,6 +119,18 @@ class SessionStore:
         legacy = os.getenv("SESSION_STRING", "").strip()
         if legacy and 1 not in items:
             items[1] = (legacy, KIND_STRING)
+
+        for n in list(self.strings):
+            slot = n
+            if slot in used or not 1 <= slot <= self.cfg.MAX_ACCOUNTS:
+                slot = self._next_free(used)
+                if slot != n:
+                    self.strings[slot] = self.strings.pop(n)
+                    self._save_strings()
+            if slot in used or not 1 <= slot <= self.cfg.MAX_ACCOUNTS:
+                continue
+            items[slot] = (self.strings[slot], KIND_STRING)
+            used.add(slot)
 
         self.items = items
         return items

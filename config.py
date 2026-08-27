@@ -60,6 +60,7 @@ DEFAULT_REPLY = env_str(
 
 CONFIG_PATH = DATA_DIR / "autoreply_config.json"
 ASSIGNED_PATH = DATA_DIR / "assigned.json"
+SESSION_STRINGS_PATH = DATA_DIR / "sessions.json"
 
 # служебные telegram-аккаунты: на них не отвечаем
 SERVICE_IDS = {777000}

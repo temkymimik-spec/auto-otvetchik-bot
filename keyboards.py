@@ -7,6 +7,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 def main_menu() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="📋 Аккаунты", callback_data="acc:list:0")
+    b.button(text="➕ Подключить аккаунт", callback_data="help:add")
     b.button(text="📊 Статус", callback_data="st:show")
     b.button(text="🔄 Сканировать", callback_data="scan:run")
     b.button(text="📝 Текст всем", callback_data="text:all")
