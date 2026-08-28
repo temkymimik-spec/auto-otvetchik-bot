@@ -57,8 +57,7 @@ class AutoReplyEngine:
         try:
             await client.connect()
             if not await client.is_user_authorized():
-                raise RuntimeError("сессия не авторизована")
-            await client.start()
+                raise RuntimeError("сессия не авторизована (строка/файл повреждены)")
             me = await client.get_me()
             self.clients[slot] = client
             self.names[slot] = (
@@ -121,9 +120,9 @@ class AutoReplyEngine:
         return started
 
     async def idle(self) -> None:
-        tasks = [cl.run_until_disconnected() for cl in self.clients.values()]
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        # Юзерботы уже запущены через start(); main() ждём вечно,
+        # пока Dispatcher не остановлен.
+        await asyncio.Event().wait()
 
     def _plug(self, client: TelegramClient, slot: int) -> None:
         @client.on(events.NewMessage(incoming=True))
